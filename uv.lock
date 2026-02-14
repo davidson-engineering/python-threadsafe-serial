@@ -428,7 +428,6 @@ wheels = [
 
 [[package]]
 name = "python-threadsafe-serial"
-version = "0.0.7"
 source = { editable = "." }
 dependencies = [
     { name = "pyserial" },

@@ -1,7 +1,7 @@
 [project]
 name = "python-threadsafe-serial"
 description = "A serial port manager, allowing concurrent connections to a serial port instance"
-version = "0.0.7"
+dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
@@ -9,7 +9,7 @@ authors = [
   { email = "matthew@davidson.engineering", name = "Matthew Davidson" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX",
   "Operating System :: MacOS",
@@ -18,12 +18,16 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
 dependencies = ["pyserial>=3"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/threadsafe_serial"]

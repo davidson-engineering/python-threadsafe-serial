@@ -1,67 +1,51 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
+from collections import deque
 import time
+from typing import Callable, Optional
 
 
-class PacketReader:
-    def __init__(self, read_callback):
+class PacketReader(ABC):
+    """Abstract base class for packet readers."""
+
+    def __init__(self, read_callback: Callable[[], Optional[bytes]]) -> None:
         self.read_callback = read_callback
 
     @abstractmethod
-    def read_packet(self):
+    def read_packet(self) -> Optional[bytes]:
         pass
 
 
 class WindowedPacketReader(PacketReader):
-    def __init__(self, read_callback, window_size=10, start_byte=0xA5, end_byte=0x5A, timeout=1.0):
+    """Sliding window packet reader with start/end byte framing."""
+
+    def __init__(
+        self,
+        read_callback: Callable[[], Optional[bytes]],
+        window_size: int = 10,
+        start_byte: int = 0xA5,
+        end_byte: int = 0x5A,
+        timeout: float = 1.0,
+    ) -> None:
         super().__init__(read_callback)
         self.window_size = window_size
         self.start_byte = start_byte
         self.end_byte = end_byte
         self.timeout = timeout
 
-    def read_packet(self):
+    def read_packet(self) -> Optional[bytes]:
         """Read packets using a sliding window."""
         start_time = time.time()
-        buffer = bytearray()
+        buffer: deque[int] = deque(maxlen=self.window_size)
 
         while time.time() - start_time <= self.timeout:
-            # Use the callback to fetch data
             data = self.read_callback()
             if data:
                 buffer.extend(data)
-                if len(buffer) > self.window_size:
-                    buffer.pop(0)  # Keep the buffer size within the window
 
-                # Check if the buffer matches the packet criteria
                 if (
                     len(buffer) == self.window_size
                     and buffer[0] == self.start_byte
                     and buffer[-1] == self.end_byte
                 ):
-                    return buffer[1:-1]  # Return packet data without start/end bytes
+                    return bytes(buffer)[1:-1]
         return None
-
-def main():
-    serial_port = "/dev/ttyACM0"
-    baudrate = 115200
-    serial_thread = ThreadSafeSerial(serial_port, baudrate)
-    serial_thread.start()
-
-    try:
-        while True:
-            command = input("Enter a command to send (or 'exit' to quit): ")
-            if command.lower() == "exit":
-                break
-            serial_thread.write(command)
-            received_data = serial_thread.read_input()
-            if received_data:
-                print(f"Processed input: {received_data}")
-    except KeyboardInterrupt:
-        print("Exiting...")
-    finally:
-        serial_thread.stop()
-        serial_thread.join()
-
-
-if __name__ == "__main__":
-    main()

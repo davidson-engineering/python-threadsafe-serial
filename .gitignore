@@ -171,4 +171,3 @@ cython_debug/
 # !.env
 !.github
 !.coveragerc
-

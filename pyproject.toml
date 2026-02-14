@@ -26,8 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
-  "config-loader @ file://./src/config-loader",
-#  "config-loader @ git+https://github.com/davidson-engineering/python-config-loader.git",
+ "config-loader @ git+https://github.com/davidson-engineering/python-config-loader.git",
   "pyserial >= 3",
 ]
 
@@ -67,3 +66,4 @@ test = ["pytest >= 7.1.1"]
 
 # [project.entry-points."spam.magical"]
 # tomatoes = "spam:main_tomatoes"
+

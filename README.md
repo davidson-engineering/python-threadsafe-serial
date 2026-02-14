@@ -1,4 +1,4 @@
-# threadsafe-serial
+# python-threadsafe-serial
 
 A Python library for thread-safe serial port communication. Multiple threads can read from and write to the same serial port without data corruption.
 
@@ -120,3 +120,4 @@ uv run pytest --cov
 ## License
 
 MIT. See [LICENSE](LICENSE).
+

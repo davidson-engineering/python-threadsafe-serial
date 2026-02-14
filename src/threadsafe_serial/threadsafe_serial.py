@@ -13,10 +13,11 @@ import threading
 import logging
 import re
 import time
+import queue
 
 logger = logging.getLogger(__name__)
 
-def truncate_data(data, max_len=8):
+def truncate_data(data, max_len=30):
     """Truncate data if it exceeds the maximum length."""
     if len(data) > max_len:
         return data[:max_len] + b"..."
@@ -31,7 +32,7 @@ class ThreadSafeSerial:
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
-        max_reconnect_attempts=5,
+        max_reconnect_attempts=0,
         search_pattern=r"ACM|USB",
     ):
         """
@@ -53,11 +54,18 @@ class ThreadSafeSerial:
         # Input buffer as a single continuous byte stream
         self.input_buffer = bytearray()
 
+        # Write queue for non-blocking writes (size=1 keeps only latest command)
+        self.write_queue = queue.Queue(maxsize=1)
+
         # Initialize connection and reader thread
         self.connect()
         self.running = True
         self.reader_thread = threading.Thread(target=self._read_serial, daemon=True)
         self.reader_thread.start()
+
+        # Start writer thread for non-blocking writes
+        self.writer_thread = threading.Thread(target=self._write_serial, daemon=True)
+        self.writer_thread.start()
 
     def detect_devices(self):
         """Detect available serial devices."""
@@ -69,9 +77,9 @@ class ThreadSafeSerial:
             or re.search(self.search_pattern, p.device)
         ]
         if not devices:
-            logger.error("No matching devices found.")
+            logger.warning("No matching devices found for pattern: %s", self.search_pattern)
             return None
-        logger.info(f"Detected devices: {devices}")
+        logger.info("Detected devices: %s", devices)
         return devices
 
     def connect(self):
@@ -85,9 +93,9 @@ class ThreadSafeSerial:
                     detected_devices = self.detect_devices()
                     if detected_devices:
                         self.port = detected_devices[0]
-                        logger.info(f"Auto-detected device: {self.port}")
+                        logger.info("Auto-detected device: %s", self.port)
                     else:
-                        raise serial.SerialException("No devices detected.")
+                        raise serial.SerialException("No serial devices were detected.")
 
                 self.serial = serial.Serial(
                     port=self.port,
@@ -99,17 +107,17 @@ class ThreadSafeSerial:
                 )
 
                 if self.serial.is_open:
-                    logger.info(f"Connected to {self.port} at {self.baudrate} baud.")
+                    logger.info("Connected to %s at %d baud", self.port, self.baudrate)
                     self.reconnect_attempts = 0
                     self.input_buffer.clear()
                     return
 
             except serial.SerialException as e:
-                logger.error(f"Failed to connect to {self.port}: {e}")
+                logger.error("Failed to connect to %s: %s", self.port, e)
                 self.reconnect_attempts += 1
 
                 if 0 < self.max_reconnect_attempts <= self.reconnect_attempts:
-                    logger.error("Max reconnect attempts reached. Exiting.")
+                    logger.error("Max reconnect attempts (%d) reached for %s", self.max_reconnect_attempts, self.port)
                     raise e
 
                 self.port = None  # Reset port for auto-detection
@@ -122,12 +130,37 @@ class ThreadSafeSerial:
                 if self.serial and self.serial.in_waiting:
                     data = self.serial.read(self.serial.in_waiting)
                     # log the size in bytes of the data received
-                    logger.debug(f"Received {len(data)} bytes: {truncate_data(data)}", extra={"data": data})
+                    logger.debug("RECVD %d bytes from %s: %s", len(data), self.port, truncate_data(data))
                     with self.lock:
                         self.input_buffer.extend(data)
             except serial.SerialException as e:
-                logger.error(f"Serial read error: {e}. Attempting to reconnect...")
+                logger.error("Serial read error on %s: %s. Attempting to reconnect", self.port, e)
                 self.handle_disconnection()
+            except OSError as e:
+                logger.error("OS error during read on %s: %s. Attempting to reconnect", self.port, e)
+                self.handle_disconnection()
+
+    def _write_serial(self):
+        """Continuously write from the write queue to the serial port."""
+        while self.running:
+            try:
+                # Block until data is available in the queue
+                data = self.write_queue.get(timeout=0.1)
+                if data is None:
+                    continue
+
+                with self.lock:
+                    if isinstance(data, str):
+                        data = data.encode("utf-8")
+                    self.serial.write(data)
+                    logger.debug("SENT %d bytes to %s: %s", len(data), self.port, truncate_data(data))
+            except queue.Empty:
+                continue
+            except serial.SerialException as e:
+                logger.error("Serial write error on %s: %s. Attempting to reconnect", self.port, e)
+                self.handle_disconnection()
+            except Exception as e:
+                logger.error("Unexpected write error on %s: %s", self.port, e)
 
     def handle_disconnection(self):
         """Handle disconnection by attempting to reconnect."""
@@ -135,17 +168,20 @@ class ThreadSafeSerial:
         self.reconnect_attempts = 0
         while True:
             try:
-                logger.info("Attempting to reconnect...")
+                logger.info("Attempting to reconnect to %s...", self.port if self.port else "serial port")
                 self.connect()
                 self.running = True
                 break
             except serial.SerialException as e:
-                logger.error(f"Reconnection failed: {e}")
+                logger.error("Reconnection failed on attempt %d to %s: %s", self.reconnect_attempts, self.port, e)
                 self.reconnect_attempts += 1
-                if 0 < self.max_reconnect_attempts <= self.reconnect_attempts:
-                    logger.error("Max reconnection attempts reached. Exiting.")
-                    raise e
-                time.sleep(self.timeout)
+                if self.max_reconnect_attempts > 0:
+                    if 0 < self.max_reconnect_attempts <= self.reconnect_attempts:
+                        logger.error("Max reconnection attempts (%d) reached for %s", self.max_reconnect_attempts, self.port)
+                        raise e
+                else:
+                    # Pause and retry indefinitely
+                    time.sleep(self.timeout)
 
     def read(self, size=-1):
         """Thread-safe read from the buffer."""
@@ -179,23 +215,47 @@ class ThreadSafeSerial:
         return self.read_until(terminator)
 
     def write(self, data):
-        """Thread-safe write to the serial port."""
+        """Thread-safe blocking write to the serial port."""
         with self.lock:
             try:
                 if isinstance(data, str):
                     data = data.encode("utf-8")
                 self.serial.write(data)
-                logger.debug(f"Sent {len(data)} bytes: {truncate_data(data)}", extra={"data": data})
+                logger.debug("SENT %d bytes to %s: %s", len(data), self.port, truncate_data(data))
             except serial.SerialException as e:
-                logger.error(f"Write error: {e}. Attempting to reconnect...")
+                logger.error("Blocking write error on %s: %s. Attempting to reconnect", self.port, e)
                 self.handle_disconnection()
+
+    def write_latest(self, data):
+        """
+        Non-blocking write that keeps only the latest command.
+        If a command is already queued, it is discarded and replaced with the new one.
+        This is ideal for real-time control where only the most recent state matters.
+        """
+        # Clear any pending writes
+        try:
+            while not self.write_queue.empty():
+                self.write_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        # Queue the new write
+        try:
+            self.write_queue.put_nowait(data)
+        except queue.Full:
+            # Queue is full, discard oldest and add new
+            try:
+                self.write_queue.get_nowait()
+                self.write_queue.put_nowait(data)
+            except (queue.Empty, queue.Full):
+                pass  # Best effort
 
     def stop(self):
         """Stop the serial communication."""
         self.running = False
         if self.serial and self.serial.is_open:
             self.serial.close()
-            logger.info("Serial connection closed.")
+            logger.info("Serial connection closed for %s", self.port)
 
     @property
     def in_waiting(self):
@@ -216,6 +276,9 @@ class ThreadSafeSerial:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
+
+    def close(self):
         self.stop()
 
 

@@ -1,6 +1,6 @@
 [project]
-name = "project_or_module_name"
-description = "A_short_description"
+name = "python-threadsafe-serial"
+description = "A serial port manager, allowing concurrent connections to a serial port instance"
 
 # If a project, then you can specify version here
 # version = "0.0.1"
@@ -26,7 +26,8 @@ classifiers = [
 ]
 
 dependencies = [
-  "python-config-loader @ git+https://github.com/davidson-engineering/python-config-loader.git",
+  "config-loader @ file://./src/config-loader",
+#  "config-loader @ git+https://github.com/davidson-engineering/python-config-loader.git",
   "pyserial >= 3",
 ]
 
